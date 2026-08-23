@@ -1,0 +1,20 @@
+# Local environments and Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Downloaded datasets are intentionally not versioned
+data/*
+!data/README.md
+
+# Generated experiment outputs
+results/*
+!results/.gitkeep
+*.log
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
