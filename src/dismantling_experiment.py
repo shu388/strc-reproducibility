@@ -12,8 +12,10 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from laplacian_solver import solve_laplacian_sdd
 from advanced_baselines import (
+    approximate_effective_resistance_efficiency,
     closeness_energy_scores,
     collective_influence_scores,
+    effective_resistance_baselines,
     radiation_theory_scores,
 )
 
@@ -22,19 +24,18 @@ warnings.filterwarnings("ignore")
 # 获取脚本所在目录的绝对路径
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RESULTS_DIR = SCRIPT_DIR.parent / 'results'
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==========================================
 # 0. Nature 期刊绘图风格高级美学设置
 # ==========================================
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
-plt.rcParams['font.size'] = 12
-plt.rcParams['axes.labelsize'] = 14
-plt.rcParams['axes.titlesize'] = 14
-plt.rcParams['legend.fontsize'] = 11.5
-plt.rcParams['xtick.labelsize'] = 12
-plt.rcParams['ytick.labelsize'] = 12
+plt.rcParams['font.size'] = 13
+plt.rcParams['axes.labelsize'] = 15
+plt.rcParams['axes.titlesize'] = 15
+plt.rcParams['legend.fontsize'] = 13
+plt.rcParams['xtick.labelsize'] = 13
+plt.rcParams['ytick.labelsize'] = 13
 plt.rcParams['axes.linewidth'] = 1.0
 plt.rcParams['xtick.major.width'] = 1.0
 plt.rcParams['ytick.major.width'] = 1.0
@@ -58,14 +59,25 @@ STYLE_CONFIG = {
     'CE': {'color': '#FFB000', 'marker': 'h', 'ms': 5.5, 'z': 5},
     'RT': {'color': '#B07AA1', 'marker': '<', 'ms': 5.5, 'z': 5},
     'CI': {'color': '#59A14F', 'marker': '>', 'ms': 5.5, 'z': 5},
+    # M1 baselines. ER has a JL/Laplacian approximation for real networks;
+    # KI and AER remain exact-only in the current implementation.
+    'ER': {'color': '#0072B2', 'marker': 'P', 'ms': 5.5, 'z': 5},
+    'KI': {'color': '#009E73', 'marker': '8', 'ms': 5.5, 'z': 5},
+    'AER': {'color': '#CC79A7', 'marker': '1', 'ms': 5.5, 'z': 5},
 }
+
+M1_METHODS = ('ER', 'KI', 'AER')
+REAL_METHODS = tuple(name for name in STYLE_CONFIG if name not in ('KI', 'AER'))
+SYNTHETIC_METHODS = tuple(STYLE_CONFIG)
+ER_APPROX_PROJECTIONS = 64
+ER_APPROX_LANDMARKS = 256
 
 
 # ==========================================
 # 1. 核心算法与稳健近似指标库
 # ==========================================
 
-def million_node_stc_approximation(G, K=800):
+def million_node_stc_approximation(G, K=400):
     N, M = G.number_of_nodes(), G.number_of_edges()
     nodes = list(G.nodes())
     node_idx = {n: i for i, n in enumerate(nodes)}
@@ -273,13 +285,13 @@ def load_dataset(filepath):
     return G
 
 
-def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
+def _legacy_run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
     datasets = []
     datasets.append(("ER Network", lambda: get_exact_connected_er(200, 400), True))
     datasets.append(("WS Network", lambda: nx.connected_watts_strogatz_graph(200, 4, 0.05), True))
     datasets.append(("BA Network", lambda: get_exact_ba(200, 400), True))
 
-    dataset_dir = SCRIPT_DIR.parent / 'data'
+    dataset_dir = SCRIPT_DIR / 'datasets'
     files = [
         "CA-HepPh.txt",
         "Email-Enron.txt",
@@ -299,7 +311,7 @@ def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
         else:
             print(f"Warning: Data {f} not found. Please ensure datasets are in {dataset_dir}")
 
-    fig, axes = plt.subplots(3, 3, figsize=(18, 14), dpi=300)
+    fig, axes = plt.subplots(3, 3, figsize=(24, 18), dpi=300)
     axes_flat = axes.flatten()
     legend_handles = {}
 
@@ -321,7 +333,7 @@ def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
             G = generator_func()
 
             metrics = {
-                'STRC': million_node_stc_approximation(G, K=800),  # 名字彻底改为 STRC
+                'STRC': million_node_stc_approximation(G, K=400),  # 名字彻底改为 STRC
                 'DC': nx.degree_centrality(G),
                 'BC': nx.betweenness_centrality(G, k=min(N, 100)),
                 'CC': approx_closeness_centrality(G, sample_size=100),
@@ -433,15 +445,15 @@ def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
     labels = list(legend_handles.keys())
     handles = [legend_handles[key] for key in labels]
     fig.legend(handles, labels, loc='lower center',
-               fontsize=11.5, ncol=6, frameon=False,
-               handlelength=2.0, labelspacing=0.8,
-               columnspacing=1.2, title='Centrality metric',
-               title_fontsize=12)
+               fontsize=13, ncol=len(labels), frameon=False,
+               title=None, handlelength=1.5, handletextpad=0.35,
+               labelspacing=0.0, columnspacing=0.55,
+               borderaxespad=0.0)
 
-    fig.tight_layout(rect=(0, 0.075, 1, 1))
+    fig.tight_layout(rect=(0, 0.12, 1, 0.96))
     fig.subplots_adjust(wspace=0.32, hspace=0.45)
 
-    out_base = RESULTS_DIR / 'Network_Dismantling'
+    out_base = SCRIPT_DIR / 'Network_Dismantling_Stunning'
     plt.savefig(f'{out_base}.svg', format='svg', dpi=300, bbox_inches='tight')
     plt.savefig(f'{out_base}.png', dpi=300, bbox_inches='tight')
     plt.savefig(f'{out_base}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -454,11 +466,321 @@ def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
 
 
 def _update_visualize_auc(auc_results):
-    """Store computed AUC values without modifying source files."""
-    output_path = RESULTS_DIR / "dismantling_auc.json"
-    output_path.write_text(json.dumps(auc_results, indent=2), encoding="utf-8")
-    print(f"\n[AUC results written to {output_path}]")
+    """将计算所得 AUC 写入 visualize_auc.py 的 raw_data 字典"""
+    raw_data_lines = ["raw_data = {\n"]
+    for ds_name, auc_vals in auc_results.items():
+        vals_str = ", ".join(f"{v:.4f}" for v in auc_vals)
+        raw_data_lines.append(f'    "{ds_name}":    [{vals_str}],\n')
+    raw_data_lines.append("}\n")
+    new_raw_data_block = "".join(raw_data_lines)
+
+    viz_path = os.path.join(os.path.dirname(__file__), "visualize_auc.py")
+    with open(viz_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    import re
+    dataset_list = list(auc_results)
+    method_list = list(STYLE_CONFIG)
+    content = re.sub(
+        r"datasets\s*=\s*\[.*?\]",
+        f"datasets = {dataset_list!r}",
+        content,
+        count=1,
+    )
+    content = re.sub(
+        r"methods\s*=\s*\[.*?\]",
+        f"methods = {method_list!r}",
+        content,
+        count=1,
+    )
+    content = re.sub(r"raw_data\s*=\s*\{.*?\}", new_raw_data_block.rstrip("\n"), content, flags=re.DOTALL)
+    with open(viz_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"\n[AUC结果已写入 visualize_auc.py]")
+    for ds, vals in auc_results.items():
+        print(f"  {ds}: {[round(v,4) for v in vals]}")
+
+
+def _run_dismantling_group(
+    datasets,
+    synthetic,
+    synthetic_repeats,
+    top_fraction,
+    output_stem,
+    render=True,
+):
+    """Run one network group and optionally render it.
+
+    The normal experiment entry point sets ``render=False`` and writes all
+    plotting inputs to ``dismantling_plot_data.json``.  Rendering is kept as
+    an optional compatibility path; routine figure edits should use
+    ``绘图_瓦解.py`` instead.
+    """
+    methods = SYNTHETIC_METHODS if synthetic else REAL_METHODS
+    ncols = 3
+    nrows = max(1, int(np.ceil(len(datasets) / ncols)))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(24, 6.5 * nrows),
+        dpi=300,
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    legend_handles = {}
+    auc_results = {}
+    group_data = {}
+
+    for index, (net_name, generator_func) in enumerate(datasets):
+        G_sample = generator_func()
+        N, E = G_sample.number_of_nodes(), G_sample.number_of_edges()
+        repeats = synthetic_repeats if synthetic else 1
+        print(
+            f"\n[{index + 1}/{len(datasets)}] Evaluating {net_name} "
+            f"(N={N}, E={E}) | Synthetic: {synthetic}"
+        )
+
+        x_target_percent = np.linspace(0, top_fraction * 100, int(N * top_fraction) + 1)
+        all_curves = {name: [] for name in methods}
+        for _ in tqdm(range(repeats), desc=f"Runs for {net_name}"):
+            G = generator_func()
+            metrics = {
+                'STRC': million_node_stc_approximation(G, K=400),
+                'DC': nx.degree_centrality(G),
+                'BC': nx.betweenness_centrality(G, k=min(N, 100)),
+                'CC': approx_closeness_centrality(G, sample_size=100),
+                'PR': nx.pagerank(G),
+                'K-core': nx.core_number(G),
+                'EC': approx_eigenvector_centrality(G),
+                'NC': approx_natural_connectivity_centrality(G),
+                'CE': closeness_energy_scores(G),
+                'RT': radiation_theory_scores(G),
+                'CI': collective_influence_scores(G, radius=2),
+            }
+            if synthetic:
+                metrics.update(effective_resistance_baselines(G))
+            else:
+                metrics['ER'] = approximate_effective_resistance_efficiency(
+                    G,
+                    projection_count=ER_APPROX_PROJECTIONS,
+                    landmark_count=ER_APPROX_LANDMARKS,
+                )
+
+            for name in methods:
+                curve = simulate_attack(G, metrics[name], top_fraction=top_fraction)
+                actual_removed_percent = ((len(curve) - 1) / N) * 100
+                x_original_percent = np.linspace(0, actual_removed_percent, len(curve))
+                all_curves[name].append(
+                    np.interp(x_target_percent, x_original_percent, curve)
+                )
+
+        mean_curves = {
+            name: np.mean(all_curves[name], axis=0).tolist()
+            for name in methods
+        }
+        std_curves = {
+            name: np.std(all_curves[name], axis=0).tolist()
+            for name in methods
+        }
+        auc_dict = {}
+        for name in methods:
+            mean_curve = np.asarray(mean_curves[name], dtype=float)
+            try:
+                auc = np.trapezoid(mean_curve, x_target_percent) / (top_fraction * 100)
+            except AttributeError:
+                auc = np.trapz(mean_curve, x_target_percent) / (top_fraction * 100)
+            auc_dict[name] = float(auc)
+        group_data[net_name] = {
+            "N": int(N),
+            "E": int(E),
+            "x": x_target_percent.tolist(),
+            "mean": mean_curves,
+            "std": std_curves,
+            "auc": auc_dict,
+        }
+
+        if not render:
+            continue
+
+        ax = axes_flat[index]
+        ax.grid(True, which='major', linestyle='--', linewidth=0.5,
+                color='#E5E7EB', alpha=0.7, zorder=0)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color('#333333')
+        ax.spines['bottom'].set_color('#333333')
+        min_curve_value = 1.0
+        auc_dict = {}
+        for name in methods:
+            mean_curve = np.mean(all_curves[name], axis=0)
+            std_curve = np.std(all_curves[name], axis=0)
+            cfg = STYLE_CONFIG[name]
+            try:
+                auc = np.trapezoid(mean_curve, x_target_percent) / (top_fraction * 100)
+            except AttributeError:
+                auc = np.trapz(mean_curve, x_target_percent) / (top_fraction * 100)
+            auc_dict[name] = float(auc)
+            ax.fill_between(
+                x_target_percent,
+                np.clip(mean_curve - std_curve, 0, 1),
+                np.clip(mean_curve + std_curve, 0, 1),
+                color=cfg['color'],
+                alpha=0.18 if name == 'STRC' else 0.10,
+                zorder=cfg['z'] - 1,
+            )
+            line, = ax.plot(
+                x_target_percent,
+                mean_curve,
+                color=cfg['color'],
+                linewidth=2.0 if name == 'STRC' else 1.5,
+                alpha=1.0 if name == 'STRC' else 0.85,
+                zorder=cfg['z'],
+                marker=cfg['marker'],
+                markersize=cfg['ms'],
+                markevery=max(1, len(x_target_percent) // 10),
+                markeredgewidth=0.8,
+                markeredgecolor='white',
+            )
+            legend_handles.setdefault(name, line)
+            min_curve_value = min(min_curve_value, float(np.min(mean_curve - std_curve)))
+
+        auc_results[net_name] = [auc_dict[name] for name in methods]
+        ax.set_title(f"{net_name}\n($N={N}$, $E={E}$)", fontsize=15, pad=8, fontweight='600')
+        ax.set_ylim(max(0.0, min_curve_value - 0.02), 1.01)
+        ax.set_xlim(0, top_fraction * 100)
+        ax.set_xticks(np.linspace(0, top_fraction * 100, 6))
+        ax.set_xticklabels([f"{int(x)}%" for x in np.linspace(0, top_fraction * 100, 6)])
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax.set_xlabel("$Q$", fontsize=14, labelpad=5)
+        ax.set_ylabel("$s(Q)$", fontsize=14, labelpad=5)
+
+    if not render:
+        plt.close(fig)
+        return group_data, methods
+
+    for ax in axes_flat[len(datasets):]:
+        ax.set_visible(False)
+    labels = list(legend_handles)
+    display_labels = [
+        'ER (approx.)' if not synthetic and name == 'ER' else name
+        for name in labels
+    ]
+    fig.legend(
+        [legend_handles[name] for name in labels],
+        display_labels,
+        loc='lower center',
+        fontsize=13,
+        ncol=len(labels),
+        frameon=False,
+        title=None,
+        handlelength=1.5,
+        handletextpad=0.35,
+        columnspacing=0.55,
+        borderaxespad=0.0,
+    )
+    fig.suptitle(
+        "Network dismantling on generated networks" if synthetic
+        else "Network dismantling on real-world networks",
+        fontsize=17,
+        fontweight='bold',
+        y=0.995,
+    )
+    fig.tight_layout(rect=(0, 0.12, 1, 0.96))
+    fig.subplots_adjust(wspace=0.32, hspace=0.45)
+    out_base = SCRIPT_DIR / output_stem
+    plt.savefig(f'{out_base}.svg', format='svg', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{out_base}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{out_base}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    return auc_results, methods
+
+
+def _update_grouped_visualize_auc(grouped_results):
+    """Create separate post-processing scripts for synthetic and real data."""
+    import re
+
+    template_path = SCRIPT_DIR / "visualize_auc.py"
+    template = template_path.read_text(encoding="utf-8")
+    for group_name, (results, methods) in grouped_results.items():
+        display_methods = [
+            'ER (approx.)' if group_name == 'real' and name == 'ER' else name
+            for name in methods
+        ]
+        raw_lines = ["raw_data = {\n"]
+        for dataset_name, values in results.items():
+            values_text = ", ".join(f"{value:.4f}" for value in values)
+            raw_lines.append(f'    "{dataset_name}": [{values_text}],\n')
+        raw_lines.append("}\n")
+        content = re.sub(
+            r"datasets\s*=\s*\[.*?\]",
+            f"datasets = {list(results)!r}",
+            template,
+            count=1,
+        )
+        content = re.sub(
+            r"methods\s*=\s*\[.*?\]",
+            f"methods = {display_methods!r}",
+            content,
+            count=1,
+        )
+        content = re.sub(
+            r"raw_data\s*=\s*\{.*?\}",
+            "".join(raw_lines).rstrip("\n"),
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+        suffix = 'Real' if group_name == 'real' else 'Synthetic'
+        content = content.replace(
+            'STRC_AUC_Improvement_Nature',
+            f'STRC_AUC_Improvement_{suffix}',
+        )
+        output_path = SCRIPT_DIR / f"visualize_auc_{group_name}.py"
+        output_path.write_text(content, encoding="utf-8")
+
+
+def run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1):
+    """Run separate generated- and real-network dismantling experiments."""
+    synthetic_datasets = [
+        ("ER Network", lambda: get_exact_connected_er(200, 400)),
+        ("WS Network", lambda: nx.connected_watts_strogatz_graph(200, 4, 0.05)),
+        ("BA Network", lambda: get_exact_ba(200, 400)),
+    ]
+    real_datasets = []
+    dataset_dir = SCRIPT_DIR.parent / 'data'
+    for filename in (
+        "CA-HepPh.txt", "Email-Enron.txt", "cit-HepTh.txt",
+        "bio-dmela.txt", "Wiki-Vote.txt", "tech-as-caida.txt",
+    ):
+        file_path = dataset_dir / filename
+        if file_path.exists():
+            graph = load_dataset(str(file_path))
+            real_datasets.append((file_path.stem, lambda G=graph: G.copy()))
+        else:
+            print(f"Warning: Data {filename} not found in {dataset_dir}")
+
+    synthetic_results, synthetic_methods = _run_dismantling_group(
+        synthetic_datasets, True, synthetic_repeats, top_fraction,
+        "Network_Dismantling_Synthetic",
+        render=False,
+    )
+    real_results, real_methods = _run_dismantling_group(
+        real_datasets, False, synthetic_repeats, top_fraction,
+        "Network_Dismantling_Real",
+        render=False,
+    )
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    result_path = RESULTS_DIR / "dismantling_plot_data.json"
+    result_path.write_text(json.dumps({
+        "synthetic": {"methods": list(synthetic_methods), "datasets": synthetic_results},
+        "real": {"methods": list(real_methods), "datasets": real_results},
+        "top_fraction": top_fraction,
+    }, indent=2), encoding="utf-8")
+    print(f"Saved plotting data to {result_path}")
 
 
 if __name__ == "__main__":
-    run_dismantling_experiment(synthetic_repeats=50, top_fraction=0.1)
+    # Exact KI/AER and exact leave-one-out ER are limited to generated
+    # networks; real networks use the scalable JL/landmark ER proxy.
+    run_dismantling_experiment(synthetic_repeats=10, top_fraction=0.1)

@@ -11,8 +11,10 @@ import warnings
 import scipy.sparse.linalg as spla
 from laplacian_solver import solve_laplacian_sdd
 from advanced_baselines import (
+    approximate_effective_resistance_efficiency,
     closeness_energy_scores,
     collective_influence_scores,
+    effective_resistance_baselines,
     radiation_theory_scores,
 )
 
@@ -20,19 +22,18 @@ warnings.filterwarnings("ignore")
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 RESULTS_DIR = SCRIPT_DIR.parent / 'results'
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==========================================
 # 0. Nature 期刊绘图风格高级美学设置
 # ==========================================
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
-plt.rcParams['font.size'] = 12
-plt.rcParams['axes.labelsize'] = 14
-plt.rcParams['axes.titlesize'] = 14
-plt.rcParams['legend.fontsize'] = 11.5
-plt.rcParams['xtick.labelsize'] = 12
-plt.rcParams['ytick.labelsize'] = 12
+plt.rcParams['font.size'] = 13
+plt.rcParams['axes.labelsize'] = 15
+plt.rcParams['axes.titlesize'] = 15
+plt.rcParams['legend.fontsize'] = 13
+plt.rcParams['xtick.labelsize'] = 13
+plt.rcParams['ytick.labelsize'] = 13
 plt.rcParams['axes.linewidth'] = 1.0
 plt.rcParams['xtick.major.width'] = 1.0
 plt.rcParams['ytick.major.width'] = 1.0
@@ -56,8 +57,18 @@ STYLE_CONFIG = {
     'CE': {'color': '#FFB000', 'marker': 'h', 'ms': 5.5, 'z': 5},
     'RT': {'color': '#B07AA1', 'marker': '<', 'ms': 5.5, 'z': 5},
     'CI': {'color': '#59A14F', 'marker': '>', 'ms': 5.5, 'z': 5},
-
+    # ER uses a JL/Laplacian approximation on real networks; KI and AER are
+    # evaluated exactly on generated networks only.
+    'ER': {'color': '#0072B2', 'marker': 'P', 'ms': 5.5, 'z': 5},
+    'KI': {'color': '#009E73', 'marker': '8', 'ms': 5.5, 'z': 5},
+    'AER': {'color': '#CC79A7', 'marker': '1', 'ms': 5.5, 'z': 5},
 }
+
+M1_METHODS = ('ER', 'KI', 'AER')
+REAL_METHODS = tuple(name for name in STYLE_CONFIG if name not in ('KI', 'AER'))
+SYNTHETIC_METHODS = tuple(STYLE_CONFIG)
+ER_APPROX_PROJECTIONS = 64
+ER_APPROX_LANDMARKS = 256
 
 def approx_natural_connectivity_centrality(G):
     """自然连通度中心性：节点重要性 = NC(G) - NC(G去掉节点v)
@@ -263,13 +274,13 @@ def simulate_sir_final_size(G, seeds, beta, gamma=1.0):
 # ==========================================
 # 3. 主干评估逻辑 (带有美学升级的绘图)
 # ==========================================
-def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
+def _legacy_run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
     datasets = []
     datasets.append(("ER Network", lambda: get_exact_connected_er(200, 400), True))
     datasets.append(("WS Network", lambda: nx.connected_watts_strogatz_graph(200, 4, 0.05), True))
     datasets.append(("BA Network", lambda: get_exact_ba(200, 400), True))
 
-    dataset_dir = SCRIPT_DIR.parent / 'data'
+    dataset_dir = SCRIPT_DIR / 'datasets'
     files = [
         "CA-HepPh.txt",
         "Email-Enron.txt",
@@ -285,10 +296,10 @@ def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
             datasets.append((os.path.splitext(f)[0], lambda G=G_real: G.copy(), False))
 
     seed_percent = 100 * seed_fraction
-    fig, axes = plt.subplots(3, 3, figsize=(18, 14), dpi=300)
+    fig, axes = plt.subplots(3, 3, figsize=(24, 18), dpi=300)
     fig.suptitle(
         f"SIR spreading performance (initial seed fraction = {seed_percent:g}%)",
-        fontsize=16,
+        fontsize=17,
         fontweight='bold',
         y=0.995,
     )
@@ -322,7 +333,7 @@ def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
         for r in tqdm(range(current_repeats), desc=f"Runs"):
             G = generator_func()
             metrics = {
-                'STRC': million_node_stc_approximation(G, K=800),
+                'STRC': million_node_stc_approximation(G, K=400),
                 'DC': nx.degree_centrality(G),
                 'BC': nx.betweenness_centrality(G, k=min(N, 100)),
                 'CC': approx_closeness_centrality(G, sample_size=100),
@@ -412,15 +423,15 @@ def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
 
     # 图例
     fig.legend(handles, labels, loc='lower center',
-               fontsize=11.5, ncol=6, frameon=False,
-               handlelength=2.0, labelspacing=0.8,
-               columnspacing=1.2, title='Centrality metric',
-               title_fontsize=12)
+               fontsize=13, ncol=len(labels), frameon=False,
+               title=None, handlelength=1.5, handletextpad=0.35,
+               labelspacing=0.0, columnspacing=0.55,
+               borderaxespad=0.0)
 
-    fig.tight_layout(rect=(0, 0.085, 1, 0.955))
+    fig.tight_layout(rect=(0, 0.12, 1, 0.96))
     fig.subplots_adjust(wspace=0.32, hspace=0.45)
 
-    out_base = RESULTS_DIR / 'Network_Spreading_Influence'
+    out_base = SCRIPT_DIR / 'Network_Spreading_Influence_Stunning'
     plt.savefig(f'{out_base}.svg', format='svg', dpi=300)
     plt.savefig(f'{out_base}.png', dpi=300, bbox_inches='tight')
     plt.savefig(f'{out_base}.pdf', format='pdf', dpi=300, bbox_inches='tight')
@@ -433,10 +444,316 @@ def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
 
 
 def _update_visualize_spreading(f_mean_results):
-    """Store mean outbreak sizes without modifying source files."""
-    output_path = RESULTS_DIR / "spreading_results.json"
-    output_path.write_text(json.dumps(f_mean_results, indent=2), encoding="utf-8")
-    print(f"\n[Spreading results written to {output_path}]")
+    """将计算所得平均 F 写入 visualize_spreading.py 的 raw_data 字典"""
+    raw_data_lines = ["raw_data = {\n"]
+    for ds_name, f_vals in f_mean_results.items():
+        vals_str = ", ".join(f"{v:.4f}" for v in f_vals)
+        raw_data_lines.append(f'    "{ds_name}":    [{vals_str}],\n')
+    raw_data_lines.append("}\n")
+    new_raw_data_block = "".join(raw_data_lines)
+
+    viz_path = os.path.join(os.path.dirname(__file__), "visualize_spreading.py")
+    with open(viz_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    import re
+    dataset_list = list(f_mean_results)
+    method_list = list(STYLE_CONFIG)
+    content = re.sub(
+        r"datasets\s*=\s*\[.*?\]",
+        f"datasets = {dataset_list!r}",
+        content,
+        count=1,
+    )
+    content = re.sub(
+        r"methods\s*=\s*\[.*?\]",
+        f"methods = {method_list!r}",
+        content,
+        count=1,
+    )
+    content = re.sub(r"raw_data\s*=\s*\{.*?\}", new_raw_data_block.rstrip("\n"), content, flags=re.DOTALL)
+    with open(viz_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"\n[平均F结果已写入 visualize_spreading.py]")
+    for ds, vals in f_mean_results.items():
+        print(f"  {ds}: {[round(v,4) for v in vals]}")
+
+def _run_spreading_group(
+    datasets,
+    synthetic,
+    synthetic_repeats,
+    seed_fraction,
+    output_stem,
+    render=True,
+):
+    """Run one network group and optionally render it.
+
+    The normal experiment entry point sets ``render=False`` and writes all
+    plotting inputs to ``spreading_plot_data.json``.  Rendering is kept as
+    an optional compatibility path; routine figure edits should use
+    ``绘图_传播.py`` instead.
+    """
+    methods = SYNTHETIC_METHODS if synthetic else REAL_METHODS
+    ncols = 3
+    nrows = max(1, int(np.ceil(len(datasets) / ncols)))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(24, 6.5 * nrows),
+        dpi=300,
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    legend_handles = {}
+    f_mean_results = {}
+    group_data = {}
+
+    for index, (net_name, generator_func) in enumerate(datasets):
+        G_sample = generator_func()
+        N, E = G_sample.number_of_nodes(), G_sample.number_of_edges()
+        repeats = synthetic_repeats if synthetic else 1
+        sir_simulations = 20 if synthetic else (5 if N > 10000 else 20)
+        print(
+            f"\n[{index + 1}/{len(datasets)}] Evaluating {net_name} "
+            f"(N={N}, E={E}) | Synthetic: {synthetic}"
+        )
+
+        degrees = np.asarray([degree for _, degree in G_sample.degree()], dtype=float)
+        mean_degree = float(np.mean(degrees))
+        mean_squared_degree = float(np.mean(degrees ** 2))
+        beta_c = mean_degree / mean_squared_degree if mean_squared_degree > 0 else 0.05
+        beta_multipliers = np.array([0.5, 0.75, 1.0, 1.3, 1.5, 2.0, 2.5])
+        betas = np.clip(beta_c * beta_multipliers, np.finfo(float).eps, 1.0)
+        if betas[-1] <= betas[0]:
+            betas = np.linspace(np.finfo(float).eps, 1.0, 7)
+        results = {
+            name: np.zeros((repeats, len(betas)), dtype=float)
+            for name in methods
+        }
+
+        for repeat_index in tqdm(range(repeats), desc=f"Runs for {net_name}"):
+            G = generator_func()
+            metrics = {
+                'STRC': million_node_stc_approximation(G, K=400),
+                'DC': nx.degree_centrality(G),
+                'BC': nx.betweenness_centrality(G, k=min(N, 100)),
+                'CC': approx_closeness_centrality(G, sample_size=100),
+                'PR': nx.pagerank(G),
+                'K-core': nx.core_number(G),
+                'EC': approx_eigenvector_centrality(G),
+                'NC': approx_natural_connectivity_centrality(G),
+                'CE': closeness_energy_scores(G),
+                'RT': radiation_theory_scores(G),
+                'CI': collective_influence_scores(G, radius=2),
+            }
+            if synthetic:
+                metrics.update(effective_resistance_baselines(G))
+            else:
+                metrics['ER'] = approximate_effective_resistance_efficiency(
+                    G,
+                    projection_count=ER_APPROX_PROJECTIONS,
+                    landmark_count=ER_APPROX_LANDMARKS,
+                )
+            seed_count = max(int(N * seed_fraction), 1)
+            seeds = {
+                name: get_top_k_nodes(metrics[name], seed_count)
+                for name in methods
+            }
+            for beta_index, beta in enumerate(betas):
+                for name in methods:
+                    values = [
+                        simulate_sir_final_size(G, seeds[name], beta, 1.0)
+                        for _ in range(sir_simulations)
+                    ]
+                    results[name][repeat_index, beta_index] = np.mean(values)
+
+        mean_curves = {
+            name: np.mean(results[name], axis=0).tolist()
+            for name in methods
+        }
+        std_curves = {
+            name: np.std(results[name], axis=0).tolist()
+            for name in methods
+        }
+        group_data[net_name] = {
+            "N": int(N),
+            "E": int(E),
+            "beta": betas.tolist(),
+            "mean": mean_curves,
+            "std": std_curves,
+            "average_final_size": {
+                name: float(np.mean(results[name])) for name in methods
+            },
+        }
+
+        if not render:
+            continue
+
+        ax = axes_flat[index]
+        ax.grid(True, which='major', linestyle='--', linewidth=0.5,
+                color='#E5E7EB', alpha=0.7, zorder=0)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        maximum = 0.0
+        f_mean_results[net_name] = [float(np.mean(results[name])) for name in methods]
+        for name in methods:
+            mean_values = np.mean(results[name], axis=0)
+            std_values = np.std(results[name], axis=0)
+            cfg = STYLE_CONFIG[name]
+            ax.fill_between(
+                betas,
+                np.clip(mean_values - std_values, 0, 1),
+                np.clip(mean_values + std_values, 0, 1),
+                color=cfg['color'],
+                alpha=0.18 if name == 'STRC' else 0.10,
+                zorder=cfg['z'] - 1,
+            )
+            line, = ax.plot(
+                betas,
+                mean_values,
+                color=cfg['color'],
+                linewidth=2.0 if name == 'STRC' else 1.5,
+                alpha=1.0 if name == 'STRC' else 0.85,
+                zorder=cfg['z'],
+                marker=cfg['marker'],
+                markersize=cfg['ms'],
+                markeredgewidth=0.8,
+                markeredgecolor='white',
+            )
+            legend_handles.setdefault(name, line)
+            maximum = max(maximum, float(np.max(mean_values + std_values)))
+
+        ax.set_title(f"{net_name}\n($N={N}$, $E={E}$)", fontsize=14, pad=8, fontweight='600')
+        ax.set_ylim(0, min(maximum * 1.1, 1.02) if maximum > 0 else 0.1)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.set_xlabel(r"$\beta$", fontsize=14, labelpad=5)
+        ax.set_ylabel(r"$F$", fontsize=14, labelpad=5)
+
+    if not render:
+        plt.close(fig)
+        return group_data, methods
+
+    for ax in axes_flat[len(datasets):]:
+        ax.set_visible(False)
+    labels = list(legend_handles)
+    display_labels = [
+        'ER (approx.)' if not synthetic and name == 'ER' else name
+        for name in labels
+    ]
+    fig.legend(
+        [legend_handles[name] for name in labels],
+        display_labels,
+        loc='lower center',
+        fontsize=13,
+        ncol=len(labels),
+        frameon=False,
+        title=None,
+        handlelength=1.5,
+        handletextpad=0.35,
+        columnspacing=0.55,
+        borderaxespad=0.0,
+    )
+    fig.suptitle(
+        f"SIR spreading on {'generated' if synthetic else 'real-world'} networks "
+        f"(initial seed fraction = {100 * seed_fraction:g}%)",
+        fontsize=17,
+        fontweight='bold',
+        y=0.995,
+    )
+    fig.tight_layout(rect=(0, 0.12, 1, 0.96))
+    fig.subplots_adjust(wspace=0.32, hspace=0.45)
+    out_base = SCRIPT_DIR / output_stem
+    plt.savefig(f'{out_base}.svg', format='svg', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{out_base}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{out_base}.pdf', format='pdf', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    return f_mean_results, methods
+
+
+def _update_grouped_visualize_spreading(grouped_results):
+    """Create separate post-processing scripts for synthetic and real data."""
+    import re
+
+    template = (SCRIPT_DIR / "visualize_spreading.py").read_text(encoding="utf-8")
+    for group_name, (results, methods) in grouped_results.items():
+        display_methods = [
+            'ER (approx.)' if group_name == 'real' and name == 'ER' else name
+            for name in methods
+        ]
+        raw_lines = ["raw_data = {\n"]
+        for dataset_name, values in results.items():
+            values_text = ", ".join(f"{value:.4f}" for value in values)
+            raw_lines.append(f'    "{dataset_name}": [{values_text}],\n')
+        raw_lines.append("}\n")
+        content = re.sub(
+            r"datasets\s*=\s*\[.*?\]",
+            f"datasets = {list(results)!r}",
+            template,
+            count=1,
+        )
+        content = re.sub(
+            r"methods\s*=\s*\[.*?\]",
+            f"methods = {display_methods!r}",
+            content,
+            count=1,
+        )
+        content = re.sub(
+            r"raw_data\s*=\s*\{.*?\}",
+            "".join(raw_lines).rstrip("\n"),
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+        suffix = 'Real' if group_name == 'real' else 'Synthetic'
+        content = content.replace(
+            'STRC_Spreading_Improvement_Nature',
+            f'STRC_Spreading_Improvement_{suffix}',
+        )
+        output_path = SCRIPT_DIR / f"visualize_spreading_{group_name}.py"
+        output_path.write_text(content, encoding="utf-8")
+
+
+def run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05):
+    """Run separate generated- and real-network spreading experiments."""
+    synthetic_datasets = [
+        ("ER Network", lambda: get_exact_connected_er(200, 400)),
+        ("WS Network", lambda: nx.connected_watts_strogatz_graph(200, 4, 0.05)),
+        ("BA Network", lambda: get_exact_ba(200, 400)),
+    ]
+    real_datasets = []
+    dataset_dir = SCRIPT_DIR.parent / 'data'
+    for filename in (
+        "CA-HepPh.txt", "Email-Enron.txt", "cit-HepTh.txt",
+        "bio-dmela.txt", "Wiki-Vote.txt", "tech-as-caida.txt",
+    ):
+        file_path = dataset_dir / filename
+        if file_path.exists():
+            graph = load_empirical_network(str(file_path))
+            real_datasets.append((file_path.stem, lambda G=graph: G.copy()))
+        else:
+            print(f"Warning: Data {filename} not found in {dataset_dir}")
+
+    synthetic_results, synthetic_methods = _run_spreading_group(
+        synthetic_datasets, True, synthetic_repeats, seed_fraction,
+        "Network_Spreading_Synthetic1",
+        render=False,
+    )
+    real_results, real_methods = _run_spreading_group(
+        real_datasets, False, synthetic_repeats, seed_fraction,
+        "Network_Spreading_Real1",
+        render=False,
+    )
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    result_path = RESULTS_DIR / "spreading_plot_data.json"
+    result_path.write_text(json.dumps({
+        "synthetic": {"methods": list(synthetic_methods), "datasets": synthetic_results},
+        "real": {"methods": list(real_methods), "datasets": real_results},
+        "seed_fraction": seed_fraction,
+    }, indent=2), encoding="utf-8")
+    print(f"Saved plotting data to {result_path}")
+
 
 if __name__ == "__main__":
     run_spreading_experiment(synthetic_repeats=10, seed_fraction=0.05)
